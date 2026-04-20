@@ -325,7 +325,3 @@ Vectors are supplied externally and stored with `vectorizer: none`.
 - The checked-in `uploads/` directory currently contains sample uploaded files and is still untracked in Git status.
 - `docker-compose.yaml` relies on a prebuilt app image instead of building it directly.
 - There is no automated test suite in the repository yet.
-
-## License
-
-No license file is currently included in the repository.
