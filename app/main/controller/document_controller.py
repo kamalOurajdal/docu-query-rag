@@ -12,10 +12,7 @@ class DocumentEmbedResource(Resource):
     @api.expect(DocumentDto.upload_parser)
     def post(self):
         args = DocumentDto.upload_parser.parse_args()
-        return upload_and_embed_document(
-            file=args["file"],
-            name=args.get("name"),
-        )
+        return upload_and_embed_document(file=args["file"])
 
 
 @api.route("/<document_id>/reindex")

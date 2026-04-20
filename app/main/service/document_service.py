@@ -13,7 +13,7 @@ from app.main.util.indexing import ALLOWED_EXTS, process_single_file
 from app.main.util.utils import generate_id
 
 
-def upload_and_embed_document(file, name=None) -> tuple:
+def upload_and_embed_document(file) -> tuple:
     """Save an uploaded file, create an AppDocument record, and kick off background embedding."""
     try:
         filename = secure_filename(file.filename or "")
@@ -32,7 +32,7 @@ def upload_and_embed_document(file, name=None) -> tuple:
         file.save(full_path)
 
         document = AppDocument(
-            name=name or filename,
+            name=filename,
             path=full_path,
             size=os.path.getsize(full_path),
             embedding={"status": EmbeddingStatusEnum.NOT_STARTED.value},

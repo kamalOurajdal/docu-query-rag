@@ -26,6 +26,3 @@ class DocumentDto:
     upload_parser.add_argument(
         "file", location="files", type=FileStorage, required=True, help="File to upload and embed"
     )
-    upload_parser.add_argument(
-        "name", location="form", type=str, required=False, help="Document name (defaults to filename)"
-    )
