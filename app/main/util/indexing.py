@@ -24,7 +24,7 @@ def process_single_file(app_document: AppDocument, retry: bool = False) -> Dict[
     Kick off background indexing for a document.
     If `retry=True`, first checks whether the document is already indexed in Weaviate.
     """
-    original_name = app_document.file_metadata.get("filename")
+    original_name = app_document.name
     try:
         if retry:
             logger.info(f"Retrying indexing for file {app_document.id}...")
@@ -58,8 +58,8 @@ def _index_in_background(document: AppDocument) -> None:
     @copy_current_request_context
     def bg_task():
         try:
-            ext = document.file_metadata.get("file_type", "").lower()
-            text = extract_text(str(document.file_metadata["full_path"]), ext)
+            ext = document.path.rsplit(".", 1)[-1].lower() if document.path and "." in document.path else ""
+            text = extract_text(str(document.path), ext)
             chunks = chunk_text(text)
 
             if not chunks:
@@ -75,7 +75,7 @@ def _index_in_background(document: AppDocument) -> None:
             )
 
             properties = {
-                "filename": document.file_metadata["filename"],
+                "filename": document.name,
                 "document_id": document.id,
             }
 

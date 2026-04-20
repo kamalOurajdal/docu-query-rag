@@ -13,7 +13,7 @@ from app.main.util.indexing import ALLOWED_EXTS, process_single_file
 from app.main.util.utils import generate_id
 
 
-def upload_and_embed_document(file, name=None, description=None, tags=None) -> tuple:
+def upload_and_embed_document(file, name=None) -> tuple:
     """Save an uploaded file, create an AppDocument record, and kick off background embedding."""
     try:
         filename = secure_filename(file.filename or "")
@@ -33,14 +33,8 @@ def upload_and_embed_document(file, name=None, description=None, tags=None) -> t
 
         document = AppDocument(
             name=name or filename,
-            description=description or "",
-            tags=[t.strip() for t in tags.split(",")] if tags else [],
-            file_metadata={
-                "filename": filename,
-                "file_type": ext,
-                "full_path": full_path,
-                "size": os.path.getsize(full_path),
-            },
+            path=full_path,
+            size=os.path.getsize(full_path),
             embedding={"status": EmbeddingStatusEnum.NOT_STARTED.value},
             created_on=datetime.utcnow().isoformat(),
         )
@@ -65,7 +59,7 @@ def reindex_document(document_id: str) -> tuple:
     if not app_document or not app_document._id:
         return {"status": "error", "message": "File not found"}, 404
 
-    file_path = app_document.file_metadata.get("full_path")
+    file_path = app_document.path
     embedding_status = app_document.embedding.get("status")
 
     if not file_path or not os.path.exists(file_path):

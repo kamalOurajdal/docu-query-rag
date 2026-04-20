@@ -29,9 +29,3 @@ class DocumentDto:
     upload_parser.add_argument(
         "name", location="form", type=str, required=False, help="Document name (defaults to filename)"
     )
-    upload_parser.add_argument(
-        "description", location="form", type=str, required=False, help="Document description"
-    )
-    upload_parser.add_argument(
-        "tags", location="form", type=str, required=False, help="Comma-separated list of tags"
-    )

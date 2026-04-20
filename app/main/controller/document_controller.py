@@ -15,8 +15,6 @@ class DocumentEmbedResource(Resource):
         return upload_and_embed_document(
             file=args["file"],
             name=args.get("name"),
-            description=args.get("description"),
-            tags=args.get("tags"),
         )
 
 
