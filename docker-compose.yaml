@@ -1,0 +1,58 @@
+version: "2.1"
+services:
+
+  dq-mongo:
+    container_name: dq-mongo
+    image: mongo:4.2.17-bionic
+    restart: always
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: dq_root
+      MONGO_INITDB_ROOT_PASSWORD: Dq_PEDSA7dd2Brx_pw0rd
+    ports:
+      - 27017:27017
+    volumes:
+      - dq_data_mongo:/data/db
+    networks:
+      - dq-network
+
+  
+  dq-query:
+    container_name: dq-query
+    image: dq-query:latest
+    volumes:
+      - dq_data:/dq_data/
+    ports:
+      - "5000:5000"
+    env_file:
+      - .env
+    depends_on:
+      - dq-mongo
+      - dq-weaviate
+    networks:
+      - dq-network
+  
+  dq-weaviate:
+    container_name: dq-weaviate
+    image: semitechnologies/weaviate:1.24.7
+    restart: always
+    ports:
+      - "8080:8080"
+    volumes:
+      - weaviate_data:/var/lib/weaviate
+    environment:
+      - QUERY_DEFAULTS_LIMIT=25
+      - AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED=true
+      - PERSISTENCE_DATA_PATH=/var/lib/weaviate
+      - DEFAULT_VECTORIZER_MODULE=none
+      - CLUSTER_HOSTNAME=weaviate
+    networks:
+      - dq-network
+
+volumes:
+  dq_data_mongo:
+  dq_data:
+  weaviate_data:
+
+networks:
+  dq-network:
+    driver: bridge
