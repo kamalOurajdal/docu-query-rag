@@ -1,64 +1,84 @@
 # DocuQuery
 
-DocuQuery is a Flask-based Retrieval-Augmented Generation (RAG) API for indexing business documents and generating grounded report content from them. It stores document metadata in MongoDB, pushes embedded chunks into Weaviate, and uses OpenAI for embeddings, OCR-style extraction, and answer generation.
+DocuQuery is a Flask-based document indexing and question-answering API. It accepts uploaded files, stores them on disk, extracts their content, chunks and embeds that content with OpenAI, indexes the vectors in Weaviate, and generates grounded answers from selected documents.
 
-The current codebase is optimized for a workflow where documents already exist in MongoDB with file metadata pointing to files on disk. Once a document is embedded, the API can retrieve relevant chunks across one or more document IDs and generate a section draft from that evidence.
+The current implementation is centered on a simple flow:
+
+1. Upload a document through the API.
+2. Save it under `UPLOAD_FOLDER`.
+3. Create an `app_documents` record in MongoDB.
+4. Extract and embed the document in a background thread.
+5. Query one or more indexed document IDs through the chat endpoint.
 
 ## What It Does
 
-- Checks service health for MongoDB and Weaviate.
-- Embeds supported documents into Weaviate in the background.
-- Reindexes documents that previously failed.
-- Removes indexed chunks for a document from Weaviate.
-- Generates report sections using vector search plus LLM completion.
-- Uses OpenAI for embeddings, extraction, and generation.
+- Uploads and stores supported files locally.
+- Creates a MongoDB document record for each uploaded file.
+- Extracts text from PDFs, Office files, text files, and images.
+- Embeds extracted chunks with OpenAI.
+- Stores vectors and chunk text in Weaviate.
+- Generates grounded plain-text answers from retrieved chunks.
+- Exposes health, document, and chat endpoints through Flask-RESTX.
 
 ## Architecture
 
-The service is structured around three layers:
+The service uses four main pieces:
 
-- `MongoDB`: stores the `app_documents` records and embedding status.
-- `Weaviate`: stores chunk vectors and searchable chunk text.
-- `OpenAI`: creates embeddings, extracts content from scanned PDFs and images, and generates final responses.
+- `Flask`: HTTP API, app bootstrapping, and background task kickoff.
+- `MongoDB`: stores document metadata and embedding status in `app_documents`.
+- `Weaviate`: stores embedded chunks for retrieval.
+- `OpenAI`: handles embeddings, scanned/image extraction, and answer generation.
 
-High-level flow:
+High-level request flow:
 
-1. A document record is loaded from MongoDB.
-2. The service reads the file from `file_metadata.full_path`.
-3. Text is extracted based on file type.
-4. The text is split into overlapping chunks.
-5. Chunks are embedded and indexed into Weaviate.
-6. A chat request embeds the query, retrieves top matches from Weaviate, and asks the LLM to generate a grounded answer.
+1. `POST /documents/embed` receives a multipart upload.
+2. The file is saved to `UPLOAD_FOLDER` with a generated ID prefix.
+3. A MongoDB document is inserted with fields like `_id`, `name`, `path`, `size`, and `embedding`.
+4. A background thread extracts text, chunks it, embeds it, and writes batches to Weaviate.
+5. `POST /chat` embeds the query, retrieves the top matching chunks for the requested document IDs, and asks OpenAI to answer strictly from that context.
 
 ## Project Layout
 
 ```text
 .
-├── application.py               # App entrypoint, Flask-Script commands, schema helpers
-├── Dockerfile                   # Container image for production-style serving with Gunicorn
+├── application.py
+├── Dockerfile
+├── docker-compose.yaml
 ├── requirements.txt
+├── run.sh
+├── setup-local-dev.sh
+├── uploads/
 └── app
     ├── db
-    │   ├── connection.py        # Mongo client
+    │   ├── connection.py
+    │   ├── document.py
     │   └── models/app_document.py
     └── main
-        ├── __init__.py          # Flask app factory
-        ├── config.py            # Env-based configuration
+        ├── __init__.py
+        ├── config.py
         ├── components
         │   ├── openai_client.py
         │   └── weaviate_client.py
-        ├── controller           # REST endpoints
-        ├── service              # Business logic
-        └── util                 # Chunking, RAG, extractors, DTOs, enums
+        ├── controller
+        ├── service
+        └── util
 ```
 
-## API Surface
+Key files:
+
+- [application.py](/home/kamal/Workspace/personal/projects/docu-query/application.py): app entrypoint plus `run`, `create_schema`, and `delete_schema` commands.
+- [app/main/controller/document_controller.py](/home/kamal/Workspace/personal/projects/docu-query/app/main/controller/document_controller.py): upload, reindex, and unindex routes.
+- [app/main/service/document_service.py](/home/kamal/Workspace/personal/projects/docu-query/app/main/service/document_service.py): upload persistence and embedding orchestration.
+- [app/main/util/indexing.py](/home/kamal/Workspace/personal/projects/docu-query/app/main/util/indexing.py): background extraction, chunking, embedding, and indexing.
+- [app/db/document.py](/home/kamal/Workspace/personal/projects/docu-query/app/db/document.py): lightweight base model for Mongo-backed documents.
+
+## API
 
 ### `GET /health`
 
 Checks connectivity to MongoDB and Weaviate.
 
-Example success response:
+Example response:
 
 ```json
 {
@@ -67,34 +87,51 @@ Example success response:
 }
 ```
 
-### `POST /documents/<document_id>/embed`
+### `POST /documents/embed`
 
-Starts asynchronous extraction, chunking, embedding, and indexing for a document.
+Uploads a file, creates a document record, and starts background embedding.
 
-Returns `202` when processing starts.
+Request type:
+
+- `multipart/form-data`
+
+Fields:
+
+- `file` required: uploaded document
+- `name` optional: display name stored in MongoDB, defaults to the filename
+
+Example response when processing starts:
+
+```json
+{
+  "status": "RUNNING",
+  "message": "Embedding process started successfully.",
+  "document_id": "66C3AF974BA54025856AD8D3EDE886CC"
+}
+```
 
 ### `POST /documents/<document_id>/reindex`
 
-Retries indexing for a document that is not already indexed and is not currently running.
+Retries indexing for an existing document if it is not already indexed and not already running.
 
 ### `DELETE /documents/<document_id>/unindex`
 
-Deletes all indexed Weaviate chunks for the given document ID.
+Deletes indexed chunks for a document from Weaviate.
 
 ### `POST /chat`
 
-Generates a grounded section from one or more indexed documents.
+Generates an answer based on one or more indexed documents.
 
 Request body:
 
 ```json
 {
-  "title": "Politique environnementale",
-  "document_ids": ["DOC123", "DOC456"]
+  "title": "What does the document say about planning and scheduling?",
+  "document_ids": ["66C3AF974BA54025856AD8D3EDE886CC"]
 }
 ```
 
-Example success response:
+Success response:
 
 ```json
 {
@@ -102,7 +139,7 @@ Example success response:
 }
 ```
 
-If no relevant context is found, the service returns:
+No-context response:
 
 ```json
 {
@@ -113,11 +150,26 @@ If no relevant context is found, the service returns:
 
 ## Supported File Types
 
-The indexing pipeline is reliably implemented for these formats:
+The current indexing allow-list in code is:
 
 - `pdf`
 - `docx`
 - `txt`
+- `doc`
+- `xlsx`
+- `ppt`
+- `pptx`
+- `png`
+- `jpg`
+- `jpeg`
+- `webp`
+
+Extraction is fully wired for:
+
+- `pdf`
+- `docx`
+- `txt`
+- `csv`
 - `xlsx`
 - `pptx`
 - `png`
@@ -127,40 +179,42 @@ The indexing pipeline is reliably implemented for these formats:
 
 Notes:
 
-- PDFs use native extraction first, then fall back to OpenAI for scanned or image-heavy pages.
-- Images are sent to the model for structured visual/text extraction.
-- The codebase contains some legacy extension references such as `doc`, `ppt`, and `csv`, but they are not fully wired end-to-end in the current indexing path.
+- PDFs use native text extraction first and fall back to OpenAI for scanned or image-heavy pages.
+- Images are processed with OpenAI Vision-style prompting.
+- There is still a mismatch between the allow-list and extractor dispatcher, so legacy extensions like `doc` and `ppt` are allowed by validation but do not have matching extractor handlers yet.
 
-## Document Model Expectations
+## Data Model
 
-Embedding assumes a MongoDB document exists in `app_documents` with at least:
+The service stores document records in the `app_documents` collection. A document created by the upload flow currently includes fields such as:
 
 - `_id`
-- `file_metadata.filename`
-- `file_metadata.full_path`
-- `file_metadata.file_type`
+- `name`
+- `path`
+- `size`
 - `embedding.status`
+- `created_on`
 
-The service updates `embedding.status` through these states:
+Embedding status values:
 
 - `NOT_STARTED`
 - `RUNNING`
 - `DONE`
 - `ERROR`
 
-On application startup, any documents left in `RUNNING` are reset to `ERROR` so they can be retried.
+On startup, the app resets any documents left in `RUNNING` to `ERROR` so they can be retried.
 
 ## Configuration
 
-Environment variables are loaded from the environment or a local `.env` file.
+Environment variables are loaded from the shell or `.env`.
 
-### Core
+Core variables:
 
 - `APP_ENV` - `dev` or `prod`
 - `MONGO_URI` - MongoDB connection string
 - `WEAVIATE_URL` - Weaviate base URL
+- `UPLOAD_FOLDER` - local storage directory for uploaded files, default `./uploads`
 
-### OpenAI
+OpenAI variables:
 
 - `OPENAI_API_KEY`
 - `OPENAI_EMBEDDING_MODEL` default: `text-embedding-3-small`
@@ -168,110 +222,110 @@ Environment variables are loaded from the environment or a local `.env` file.
 - `OPENAI_TIMEOUT` default: `60.0`
 - `OPENAI_MAX_RETRIES` default: `2`
 
-### Authentication
-
-Requests may be protected by an auth decorator depending on your deployment setup. Refer to the wider platform this service belongs to for token format and auth behavior.
-
 ## Local Development
 
-### 1. Create a virtual environment
+### Manual setup
 
 ```bash
 python3.8 -m venv venv
 source venv/bin/activate
-```
-
-### 2. Install dependencies
-
-```bash
 pip install --upgrade pip
 pip install -r requirements.txt
-```
-
-### 3. Set environment variables
-
-Example:
-
-```bash
-export APP_ENV=dev
-export MONGO_URI="mongodb://localhost:27017/docuquery"
-export WEAVIATE_URL="http://localhost:8080"
-export OPENAI_API_KEY="your-key"
-export OPENAI_EMBEDDING_MODEL="text-embedding-3-small"
-export OPENAI_CHAT_MODEL="gpt-4o"
-```
-
-### 4. Start the API locally
-
-```bash
 python application.py run
 ```
 
-This starts the Flask development server on port `5008`.
+The Flask development server runs on port `5008`.
 
-### 5. Initialize Weaviate schema
+### Helper script
+
+You can also use the local setup helper:
+
+```bash
+./setup-local-dev.sh docu-query
+```
+
+And the shared runner script from the parent workspace convention:
+
+```bash
+./run.sh docu-query
+```
+
+## Docker
+
+Build the image:
+
+```bash
+docker build -t dq-query:latest .
+```
+
+Run the container:
+
+```bash
+docker run --rm -p 5000:5000 \
+  --env-file .env \
+  -v "$(pwd)/uploads:/usr/src/app/uploads" \
+  dq-query:latest
+```
+
+The container serves the app with Gunicorn on port `5000`.
+
+## Docker Compose
+
+The repository includes [docker-compose.yaml](/home/kamal/Workspace/personal/projects/docu-query/docker-compose.yaml) for MongoDB, Weaviate, and the API container.
+
+Important notes about the current compose file:
+
+- It expects an image named `dq-query:latest` to already exist.
+- It uses `.env` for app configuration.
+- It mounts a named volume for document data.
+- The checked-in `.env` currently points to local host-style service URLs, so you may need to adjust it depending on whether you run the app directly or through Compose.
+
+Typical flow:
+
+```bash
+docker build -t dq-query:latest .
+docker compose up
+```
+
+## Schema Management
+
+Create the Weaviate schema:
 
 ```bash
 python application.py create_schema
 ```
 
-To remove it:
+Delete the Weaviate schema:
 
 ```bash
 python application.py delete_schema
 ```
 
-## Running with Docker
-
-Build:
-
-```bash
-docker build -t docu-query .
-```
-
-Run:
-
-```bash
-docker run --rm -p 5000:5000 \
-  -e APP_ENV=prod \
-  -e MONGO_URI="mongodb://host.docker.internal:27017/docuquery" \
-  -e WEAVIATE_URL="http://host.docker.internal:8080" \
-  -e OPENAI_API_KEY="your-key" \
-  docu-query
-```
-
-The container serves the app with Gunicorn on port `5000`.
-
-## Weaviate Schema
-
-`create_schema` creates an `AppDocuments` class with these properties:
+The `AppDocuments` class contains:
 
 - `document_id`
 - `chunk_index`
 - `text`
 - `filename`
 
-Vectors are generated externally and stored with `vectorizer: none`.
+Vectors are supplied externally and stored with `vectorizer: none`.
 
-## Extraction and RAG Notes
+## Retrieval and Generation Behavior
 
-- Chunking uses fixed-size overlapping windows, with a small attempt to break on sentence boundaries.
-- Retrieval currently uses the top `6` matching chunks filtered by document IDs.
-- Generated report text is instructed to stay grounded in retrieved context only.
-- Report output is intentionally plain text and defaults to French unless the retrieved context is clearly in another language.
+- Text is chunked into overlapping windows before embedding.
+- Chunk batches are embedded in groups of `20`.
+- Retrieval uses the top `6` chunks filtered by the provided document IDs.
+- Answers are instructed to be evidence-only, plain text, and language-matched to the retrieved context.
+- If retrieval produces no usable context, the model is instructed to return exactly `NOT_FOUND`.
 
-## Known Limitations
+## Current Limitations
 
-- There is no upload endpoint in this repository; files must already exist on disk and be referenced from MongoDB.
-- The project uses a shared `Document` base model defined in `app/db/document.py`.
-- The repository currently contains a checked-in `venv/`, which is usually better excluded from source control.
-- There are no automated tests in this repository yet.
-- Some extension allow-lists and extractor mappings are slightly inconsistent, so unsupported edge cases may surface for `doc`, `ppt`, or `csv`.
+- `doc` and `ppt` are allowed by upload validation but are not actually handled by the extractor dispatcher.
+- `csv` has an extractor but is not in the current upload allow-list.
+- The checked-in `uploads/` directory currently contains sample uploaded files and is still untracked in Git status.
+- `docker-compose.yaml` relies on a prebuilt app image instead of building it directly.
+- There is no automated test suite in the repository yet.
 
-## Suggested Next Improvements
+## License
 
-- Add a `.env.example` file.
-- Add upload and document creation endpoints.
-- Add automated tests for extraction, indexing, and chat flows.
-- Normalize file type support so allowed extensions and extractors match exactly.
-- Add request/response examples for every endpoint in Swagger or the README.
+No license file is currently included in the repository.
